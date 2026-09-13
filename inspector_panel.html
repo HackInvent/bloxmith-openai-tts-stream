@@ -1,0 +1,11 @@
+<div class="cw-block-inspector tts-ui" data-block-inspector-root data-node-id="{{ node_id }}" data-node-type="{{ node_type }}">
+  <div class="inspector-selection {{ summary_hidden }}"><div class="inspector-node-card"><div class="inspector-node-copy"><strong>{{ node_title }}</strong><span>OpenAI TTS Stream</span></div></div><div class="inspector-tabs"><button class="inspector-tab {{ general_active }}" data-inspector-tab="general" type="button">Général</button><button class="inspector-tab {{ ports_active }}" data-inspector-tab="ports" type="button">Ports</button></div></div>
+  <div class="inspector-view {{ general_hidden }}" data-inspector-panel-tab="general">
+    <div class="tts-actions block-apply-toolbar" data-block-apply-toolbar="true"><p data-tts-feedback role="status" aria-live="polite">Aucune modification.</p><button class="solid-btn" data-block-inspector-apply data-tts-apply type="button" disabled>Appliquer</button></div>
+    <label class="{{ title_hidden }}">Nom du bloc<input data-tts-title value="{{ node_title }}" maxlength="200" required /></label>
+    {{ settings_html }}
+    <p class="tts-help">Sortie Opus/Ogg sur audio_out. Pour STT ou Save Audio, reliez aussi command_out → command_in. Le lecteur n’a besoin que du lien audio ; activez son son avant la source. Réglages pris en compte au prochain Run.</p>
+    {{ command_help }}
+  </div>
+  <div class="inspector-view {{ ports_hidden }}" data-inspector-panel-tab="ports"><div class="ports-editor-section"><span class="group-label">Texte et commande en entrée</span>{{ inputs_html }}</div><div class="ports-editor-section"><span class="group-label">Audio et commandes en sortie</span>{{ outputs_html }}</div></div>
+</div>

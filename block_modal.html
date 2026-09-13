@@ -1,0 +1,10 @@
+<div class="modal-panel block-config-modal tts-ui" role="dialog" aria-modal="true" aria-labelledby="{{ node_id }}TtsTitle" data-generic-block-modal-root data-node-id="{{ node_id }}" data-node-kind="openai_tts_stream">
+  <header class="modal-header tts-header"><div><span class="panel-kicker">Synthèse vocale · OpenAI</span><h2 id="{{ node_id }}TtsTitle">{{ node_title }}</h2></div><button type="button" class="ghost-btn" data-close-block-modal>Fermer</button></header>
+  <div class="tts-body">
+    <div class="tts-intro"><strong>Du texte à la voix</strong><p>Reliez <code>text_in</code> à votre texte, puis <code>audio_out</code> au lecteur, au STT ou à Save Audio. Pour transcrire ou enregistrer, reliez aussi <code>command_out</code> à <code>command_in</code>.</p>{{ command_help }}<span class="tts-badge">Opus · Ogg · 48 kHz</span></div>
+    <label>Nom du bloc<input type="text" data-tts-title value="{{ node_title }}" maxlength="200" autocomplete="off" required /></label>
+    {{ settings_html }}
+    <details class="tts-disclosure tts-diagnostics"><summary>Diagnostic</summary><div class="tts-disclosure-body" data-block-modal-error-panel>{{ error_html }}</div></details>
+  </div>
+  <footer class="tts-actions"><p data-tts-feedback role="status" aria-live="polite">Aucune modification.</p><button type="button" class="solid-btn" data-tts-apply data-block-mutation-control disabled>Appliquer</button></footer>
+</div>
