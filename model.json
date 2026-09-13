@@ -1,5 +1,8 @@
 {
   "kind": "openai_tts_stream",
+  "version": "0.1.0",
+  "bloxsmith_compatibility": ["1.0.9"],
+  "tested_with_bloxsmith": "1.0.9",
   "title": "OpenAI TTS Stream",
   "ports": {
     "inputs": [{"id": 1, "name": "text_in", "title": "Texte", "accepts": ["text/plain", "message/*"],
