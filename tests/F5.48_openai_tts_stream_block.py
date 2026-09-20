@@ -36,6 +36,7 @@ from bloxsmith_app.orchestrator import WorkflowOrchestrator
 from bloxsmith_app.secrets import SecretManager
 from ui_smoke_common import create_project_api, graph_payload, http_json, project_editor_url, run_playwright_smoke
 from block_test_artifacts import artifact_path
+from block_test_packages import install_test_package, release_key
 from block_test_fixtures import instance_scope
 
 BLOCK = OpenAITtsStreamBlock()
@@ -442,11 +443,18 @@ def test_failures_and_stop():
         assert len(api.requests) == 1
 
 
-def document():
-    """Build the actual Text → TTS → Audio Play chain, without any implicit data/audio channel."""
+def document(block_version=None):
+    """Build the actual Text → TTS → Audio Play chain, without any implicit data/audio channel.
+
+    Args:
+        block_version: Release version to pin on the TTS node, so the editor dispatches to
+            the installed release and loads its ES modules instead of a bundled kind.
+    """
     nodes = [TextBlock().build_node_payload(node_id="text"),
              BLOCK.build_node_payload(node_id="tts", config_overrides={"api_key_ref": REF}),
              AudioPlayStreamBlock().build_node_payload(node_id="player")]
+    if block_version:
+        nodes[1]["block_version"] = block_version
     nodes[0]["outputs"][0]["text"] = "Bonjour depuis le graphe"
     for index, node in enumerate(nodes):
         node["position"] = {"x": 80 + index * 300, "y": 190}
@@ -519,11 +527,15 @@ def test_reordered_graph_modes():
 
 def test_properties_browser(page, server, blocking_errors):
     """FB6: real shell, discoverable assets, accessible responsive modal and durable atomic edits."""
-    project = create_project_api(server, title="TTS UX", document=document())["project"]
+    # The block ships as a release: its surfaces are ES modules declared in model.json,
+    # which the editor only loads for an installed release, never for a bundled kind.
+    model = install_test_package(server, "openai_tts_stream")
+    project = create_project_api(server, title="TTS UX",
+                                 document=document(block_version=model["version"]))["project"]
     graph_id = project.get("graph_id") or project["project_id"]
     page.goto(project_editor_url(server.base_url, graph_id, workspace_project_id=project["workspace_project_id"]))
     page.locator('.canvas-node[data-node-id="tts"] h3').dblclick()
-    modal = page.locator('[data-generic-block-modal-root][data-node-kind="openai_tts_stream"]')
+    modal = page.locator('[data-generic-block-modal-root].tts-ui')
     modal.wait_for()
     assert '{"action":"interrupt"}' in modal.inner_text()
     assert "son déjà envoyé au lecteur n’est pas coupé" in modal.inner_text()

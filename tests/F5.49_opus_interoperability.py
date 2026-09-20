@@ -29,8 +29,11 @@ from bloxsmith_app.graph_document import GraphDocument
 from bloxsmith_app.messages import MessageEnvelope
 from bloxsmith_app.orchestrator import WorkflowOrchestrator
 from bloxsmith_app.secrets import SecretManager
-from ui_smoke_common import graph_payload, run_playwright_smoke
+from urllib.parse import quote
+
+from ui_smoke_common import graph_payload, http_json, run_playwright_smoke
 from block_test_fixtures import instance_scope
+from block_test_packages import install_test_package, release_key
 
 TTS = runpy.run_path(str(ROOT / "blocs/openai_tts_stream/tests/F5.48_openai_tts_stream_block.py"))
 STT = runpy.run_path(str(ROOT / "blocs/openai_realtime_stt/tests/F5.46_openai_realtime_stt_block.py"))
@@ -147,24 +150,32 @@ def test_tts_fanout(channels):
 
 def verify_player(page, server, blocking_errors, captures):
     """Decode the actual TTS egress bytes with native WebCodecs and verify exact trimmed duration."""
+    # The player ships as a release: its browser runtime is an ES module, imported by URL
+    # from the installed package instead of a bundled-kind global.
+    model = install_test_package(server, "audio_play_stream")
+    key = quote(release_key(model), safe="")
+    catalog = next(item for item in http_json(server.base_url, "/api/blocks")["blocks"]
+                   if item["kind"] == release_key(model))
+    runtime_url = f"{server.base_url}/api/blocks/{key}/assets/" + next(
+        item["path"] for item in catalog["browser_runtime_assets"]
+        if item["path"].endswith("/assets/js/browser_runtime.js"))
     page.goto(server.base_url)
     page.set_content('<button id="activate">Activer le son de test</button>')
-    for asset in ("common", "opus_demux", "browser_runtime"):
-        page.add_script_tag(path=str(ROOT / f"blocs/audio_play_stream/assets/js/{asset}.js"))
     page.evaluate("""() => { document.querySelector('#activate').onclick = async () => {
       window.testAudio = new AudioContext({ sampleRate: 48000 }); await window.testAudio.resume();
     }; }""")
     page.click("#activate")
-    result = page.evaluate("""async captures => {
+    result = page.evaluate("""async ({ captures, runtimeUrl }) => {
       const abort = new AbortController();
-      const player = CWAudioPlayStream.createPlayer({ node: { config: { max_buffer_sec: 10 } }, audioContext: testAudio, signal: abort.signal });
+      const runtime = await import(runtimeUrl);
+      const player = runtime.create({ node: { config: { max_buffer_sec: 10 } }, audioContext: testAudio, signal: abort.signal });
       try {
         for (const capture of captures) for (const frame of capture) {
           await player.enqueue({ ...frame, payload: Uint8Array.from(atob(frame.payload), c => c.charCodeAt(0)).buffer });
         }
         return player.snapshot();
       } finally { abort.abort(); await testAudio.close(); }
-    }""", captures)
+    }""", {"captures": captures, "runtimeUrl": runtime_url})
     assert result["playedSamples"] == 2 * 3.3 * 48000, result
     assert result["receivedFrames"] == sum(map(len, captures)) and not result["error"], result
     assert not blocking_errors, blocking_errors

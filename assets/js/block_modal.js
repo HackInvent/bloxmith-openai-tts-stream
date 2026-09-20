@@ -1,9 +1,7 @@
-/** Register the autonomous TTS modal with the generic UI facade. */
-(function () {
-  "use strict";
-  const registry = (window.CWBlockUiBlocks = window.CWBlockUiBlocks || {});
-  registry.openai_tts_stream = {
-    /** Bind settings and return surface-only cleanup. */
-    mount(root, api) { return window.CWOpenAITtsStream.mount(root, api); },
-  };
-})();
+/** Bind this release's TTS settings modal; no synthesis request is ever issued here. */
+import { mountSettings } from "./common.js";
+
+/** Mount the surface through its injected public API and return UI-only cleanup. */
+export function mount(root, api) {
+  return mountSettings(root, api);
+}

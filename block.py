@@ -410,16 +410,6 @@ class OpenAITtsStreamBlock(BlockDefinition):
                     command("stop", aborted=True)
             key = ""  # Never retain a credential in block instance state or a result.
 
-    def ui_assets(self, surface: str = "modal") -> list[dict[str, str]]:
-        """Declare owned settings assets; the source has no browser audio runtime."""
-        if surface in {"modal", "inspector_panel"}:
-            script = "block_modal" if surface == "modal" else "inspector_panel"
-            return [{"kind": "css", "path": "assets/css/block_ui.css"},
-                    {"kind": "js", "path": "assets/js/common.js"}, {"kind": "js", "path": f"assets/js/{script}.js"}]
-        if surface == "node_card":
-            return [{"kind": "css", "path": "assets/css/block_ui.css"}]
-        return []
-
     def render_node_card(self, *, node: dict, payload: dict | None = None) -> dict:
         """Render a compact source card with voice and transport, never a credential."""
         config = _config(node.get("config"))
