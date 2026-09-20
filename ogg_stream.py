@@ -46,10 +46,10 @@ def _packet_samples(packet: bytes) -> int:
     samples = (120 << (config & 3)) if config >= 16 else ((480 << (config & 1)) if config >= 12 else (480, 960, 1920, 2880)[config & 3])
     code = toc & 3
     if code == 3 and len(packet) < 2:
-        raise OpusStreamError("Paquet Opus tronqué.")
+        raise OpusStreamError("Truncated Opus packet.")
     frames = (packet[1] & 63) if code == 3 else (1 if code == 0 else 2)
     if not 0 < frames * samples <= 5760:
-        raise OpusStreamError("Durée de paquet Opus invalide.")
+        raise OpusStreamError("Invalid Opus packet duration.")
     return frames * samples
 
 
@@ -82,11 +82,11 @@ class OggOpusStream:
         self.buffer.extend(chunk)
         while self.buffer:
             if self.ended:
-                raise OpusStreamError("Données après la fin du flux Ogg ; flux chaînés non pris en charge.")
+                raise OpusStreamError("Data after the end of the Ogg stream; chained streams are not supported.")
             if len(self.buffer) < 27:
                 return
             if self.buffer[:4] != b"OggS" or self.buffer[4] != 0:
-                raise OpusStreamError("OpenAI n’a pas retourné le conteneur Ogg Opus attendu.")
+                raise OpusStreamError("OpenAI did not return the expected Ogg Opus container.")
             header_size = 27 + self.buffer[26]
             if len(self.buffer) < header_size:
                 return
@@ -108,9 +108,9 @@ class OggOpusStream:
             self.serial = serial
         if (flags & ~7 or bool(flags & 2) != (self.sequence == 0) or serial != self.serial
                 or sequence != self.sequence or bool(flags & 1) != bool(self.packet)):
-            raise OpusStreamError("Pages Ogg manquantes, désordonnées ou profil modifié.")
+            raise OpusStreamError("Missing or out-of-order Ogg pages, or a changed profile.")
         if page_crc(page) != int.from_bytes(page[22:26], "little"):
-            raise OpusStreamError("Réponse Ogg corrompue : checksum invalide.")
+            raise OpusStreamError("Corrupted Ogg response: invalid checksum.")
         self.sequence += 1
         offset = header_size
         previous_samples, previous_seconds = self.samples, self.seconds
@@ -118,7 +118,7 @@ class OggOpusStream:
             self.packet.extend(page[offset:offset + length])
             offset += length
             if len(self.packet) > MAX_PACKET_BYTES:
-                raise OpusStreamError("Paquet ou en-tête Opus trop volumineux.")
+                raise OpusStreamError("Opus packet or header too large.")
             if length == 255:
                 continue
             packet = bytes(self.packet)
@@ -127,34 +127,34 @@ class OggOpusStream:
                 if (len(packet) < 19 or packet[:8] != b"OpusHead" or not 1 <= packet[8] <= 15
                         or packet[9] not in (1, 2) or packet[18] != 0
                         or header_size != 28 or granule != 0):
-                    raise OpusStreamError("En-tête Ogg Opus mono/stéréo invalide.")
+                    raise OpusStreamError("Invalid mono/stereo Ogg Opus header.")
                 self.channels = packet[9]
                 self.pre_skip = int.from_bytes(packet[10:12], "little")
             elif self.packets == 1:
                 if len(packet) < 16 or not packet.startswith(b"OpusTags") or offset != len(page) or granule != 0:
-                    raise OpusStreamError("En-tête de commentaires Opus invalide.")
+                    raise OpusStreamError("Invalid Opus comment header.")
             else:
                 self.samples += _packet_samples(packet)
             self.packets += 1
         if self.packets == 0:
-            raise OpusStreamError("En-tête Ogg Opus incomplet.")
+            raise OpusStreamError("Incomplete Ogg Opus header.")
         self.ended = bool(flags & 4)
         if self.samples > previous_samples:
             if (granule < self.granule or granule > self.samples
                     or (not self.ended and granule != self.samples)):
-                raise OpusStreamError("Horloge du flux Ogg Opus incohérente.")
+                raise OpusStreamError("Inconsistent Ogg Opus stream clock.")
             self.granule = granule
             self.seconds = max(0, granule - self.pre_skip) / SAMPLE_RATE
             if self.seconds - previous_seconds > MAX_PAGE_SECONDS:
-                raise OpusStreamError("Page Ogg trop longue pour une diffusion continue (5 s maximum).")
+                raise OpusStreamError("Ogg page too long for continuous streaming (5 s maximum).")
         elif granule not in (-1, 0):
-            raise OpusStreamError("Horloge d’en-tête Ogg invalide.")
+            raise OpusStreamError("Invalid Ogg header clock.")
         if self.ended and (self.packet or self.samples == 0 or self.seconds <= 0):
-            raise OpusStreamError("Fin du flux Ogg vide ou tronquée.")
+            raise OpusStreamError("Empty or truncated end of the Ogg stream.")
 
     def finish(self) -> None:
         """Require actual audio and a complete end page before a successful data stop."""
         if not self.sequence:
-            raise OpusStreamError("OpenAI a retourné un flux audio vide ou sans en-tête Ogg complet.")
+            raise OpusStreamError("OpenAI returned an empty audio stream, or one without a complete Ogg header.")
         if self.buffer or self.packet or not self.ended:
-            raise OpusStreamError("Réponse Ogg tronquée : fin du conteneur manquante.")
+            raise OpusStreamError("Truncated Ogg response: the end of the container is missing.")

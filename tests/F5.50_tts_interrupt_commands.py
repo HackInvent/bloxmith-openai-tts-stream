@@ -90,16 +90,16 @@ def test_fresh_inputs_and_invalid_commands():
     mailbox = Mock()
     context = FIXTURES.context_for(services={"runtime_listener": mailbox,
         "runtime_audio_streams": SimpleNamespace(available=True)})
-    assert activate(context, "text_in", "Même texte").status == "success"
+    assert activate(context, "text_in", "Same text").status == "success"
     assert mailbox.send.call_count == 1
     assert activate(context, "command_in", INTERRUPT, "application/json").status == "success"
     assert mailbox.send.call_count == 2
     assert mailbox.send.call_args.args[0] == {"action": "interrupt"}
     result = BLOCK.execute_runtime(context)
     assert result.status == "skipped" and mailbox.send.call_count == 2
-    assert activate(context, "text_in", "Même texte").status == "success"
+    assert activate(context, "text_in", "Same text").status == "success"
     assert mailbox.send.call_count == 3, "Equal text is a new event; a remembered interrupt is not."
-    assert mailbox.send.call_args.args[0]["text"] == "Même texte"
+    assert mailbox.send.call_args.args[0]["text"] == "Same text"
     invalid = ("{", "null", "[]", '"interrupt"', "{}", '{"action":"stop"}',
                '{"action":true}', '{"action":"interrupt","extra":1}', "x" * 4097)
     for payload in invalid:
@@ -108,7 +108,7 @@ def test_fresh_inputs_and_invalid_commands():
         assert mailbox.send.call_count == 3, "A malformed command must neither cancel nor replay old text."
         assert KEY not in str(result)
     # One activation can contain several fresh attributes (manual replay or a grouped input wave).
-    context.input_attribute("text_in").update("Ne doit pas repartir immédiatement")
+    context.input_attribute("text_in").update("Must not restart immediately")
     context.input_attribute("command_in").update(INTERRUPT, content_type="application/json")
     assert BLOCK.execute_runtime(context).status == "success"
     context.mark_inputs_consumed()
@@ -119,7 +119,7 @@ def test_input_events_and_interrupt_without_audio():
     """FB1/FB4: event identity beats remembered attributes; an interrupt needs no audio route."""
     mailbox = Mock()
     context = FIXTURES.context_for(services={"runtime_listener": mailbox})
-    context.input_attribute("text_in").update("Ancienne valeur restée visible")
+    context.input_attribute("text_in").update("Old value still visible")
     context.input_attribute("command_in").update(INTERRUPT, content_type="application/json")
     context.mark_inputs_consumed()
     context.input_events = (SimpleNamespace(input_port_id=2, value=INTERRUPT),)
@@ -183,9 +183,9 @@ def test_interrupt_idle_then_resume():
             FIXTURES.until(lambda: len(client.states("interrupted")) == count, "Idle interrupt acknowledgement missing.")
             assert not api.requests and not client.frames and not client.host.failure
             assert client.host._thread.is_alive()
-        assert activate(client.context, "text_in", "Après les interruptions").status == "success"
+        assert activate(client.context, "text_in", "After the interruptions").status == "success"
         FIXTURES.until(lambda: len(client.states("completed")) == 1, "The listener must accept text after an idle interrupt.")
-        assert [item["body"]["input"] for item in api.requests] == ["Après les interruptions"]
+        assert [item["body"]["input"] for item in api.requests] == ["After the interruptions"]
         assert not client.states("error")
 
 
@@ -193,7 +193,7 @@ def test_interrupt_in_flight_purges_queue_and_resumes():
     """FB3/FB4: cancel before headers or during Opus streaming, purge old queue, then reuse Run."""
     for mode in ("stall_headers", "hold_tail"):
         with FIXTURES.fake_openai(mode) as api, FIXTURES.listener() as client:
-            started = activate(client.context, "text_in", "Ancienne réponse")
+            started = activate(client.context, "text_in", "Old answer")
             assert started.status == "success" and api.first.wait(2)
             old_id = started.metadata[BLOCK.kind]["stream_id"]
             pending_ids = []
@@ -218,12 +218,12 @@ def test_interrupt_in_flight_purges_queue_and_resumes():
                 assert len(commands) == 2
             else:
                 assert not commands and not old_frames, "Never invent start/stop without any accepted audio."
-            resumed = activate(client.context, "text_in", "Nouvelle réponse")
+            resumed = activate(client.context, "text_in", "New answer")
             assert resumed.status == "success"
             new_id = resumed.metadata[BLOCK.kind]["stream_id"]
             api.release.set()
             FIXTURES.until(lambda: len(client.states("completed")) == 1, "New text must finish on the same listener.")
-            assert [item["body"]["input"] for item in api.requests] == ["Ancienne réponse", "Nouvelle réponse"]
+            assert [item["body"]["input"] for item in api.requests] == ["Old answer", "New answer"]
             assert client.states("completed")[0].metadata[BLOCK.kind]["stream_id"] == new_id
             assert not client.states("error") and not client.host.failure
             assert not any(frame["stream_id"] in pending_ids for frame in client.frames)
@@ -291,24 +291,24 @@ def test_real_graph_command_only_interrupt_and_simulation():
                 return bool(received)
 
             assert not api.requests, "Run must not synthesize without text."
-            publish("text", "Première réponse du graphe", 1)
+            publish("text", "First answer from the graph", 1)
             FIXTURES.until(receive_one, "Text input must trigger streamed Opus before command input has a value.")
             first_id = received[0].stream_id
-            publish("text", "Attente devenue obsolète", 2)
+            publish("text", "Wait that became obsolete", 2)
             publish("command", INTERRUPT, 1, "application/json")
             FIXTURES.until(lambda: state() == "interrupted", "Command-only graph event must cancel after text consumption.", timeout=2)
             assert len(api.requests) == 1, "Old queued text must not start during interruption."
             aborted = json.loads(run.output_values["tts:2"]["value"])
             assert aborted["action"] == "stop" and aborted["stream_id"] == first_id and aborted["aborted"] is True
             assert run.run_id in engine._active_sessions and not run.cancel_requested
-            publish("text", "Réponse après interruption", 3)
+            publish("text", "Answer after the interruption", 3)
             api.release.set()
             FIXTURES.until(lambda: state() == "completed", "The same Run must complete the next synthesis.")
             deadline = time.monotonic() + 2
             expected_total = aborted["byte_count"] + len(FIXTURES.encoded_opus())
             while sum(len(frame.payload) for frame in received) < expected_total and time.monotonic() < deadline:
                 receive_one()
-            assert [item["body"]["input"] for item in api.requests] == ["Première réponse du graphe", "Réponse après interruption"]
+            assert [item["body"]["input"] for item in api.requests] == ["First answer from the graph", "Answer after the interruption"]
             old_frames = [frame for frame in received if frame.stream_id == first_id]
             new_frames = [frame for frame in received if frame.stream_id != first_id]
             assert len(old_frames) == aborted["frame_count"]

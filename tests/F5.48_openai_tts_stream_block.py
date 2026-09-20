@@ -175,7 +175,7 @@ def test_contract_and_settings():
                 assert not context.services["resolve_secret"].called
         assert BLOCK.execute_runtime(replace(context, input_ports=())).status == "failed"
         legacy = replace(context, output_ports=context.output_ports[:1])
-        assert "Ports TTS invalides" in BLOCK.execute_runtime(legacy).error
+        assert "Invalid TTS ports" in BLOCK.execute_runtime(legacy).error
     for bad in ({"api_key_ref": KEY}, {"api_key": KEY}, {"voice": "fake"}, {"speed": "nan"},
                 {"speed": True}, {"instructions": []}, {"connect_timeout_sec": 0}, {"max_audio_sec": 601},
                 {"read_timeout_sec": "inf"}, {"instructions": "x" * 1025}):
@@ -204,8 +204,8 @@ def test_contract_and_settings():
     for render in (BLOCK.render_modal, BLOCK.render_inspector_panel):
         assert '"action":"interrupt"' in render(node=node)["html"]
         legacy_html = render(node={**node, "inputs": node["inputs"][:1]})["html"]
-        assert "n’a pas d’entrée command_in" in legacy_html and "recréez le TTS" in legacy_html
-    error_modal = BLOCK.render_modal(node=node, payload={"runtime": {"error": "Test erreur"}})["html"]
+        assert "has no command_in input" in legacy_html and "recreate the TTS" in legacy_html
+    error_modal = BLOCK.render_modal(node=node, payload={"runtime": {"error": "Test error"}})["html"]
     assert 'tts-diagnostics" open' in error_modal and error_modal.count("data-block-modal-error-panel") == 1
     for asset in declared_block_ui_assets(BLOCK.kind, None):
         assert (BLOCK.directory / asset["path"]).is_file()
@@ -272,13 +272,13 @@ def test_streaming_and_order():
     """FB1–FB4: real HTTP Opus before EOF, exact separate start/stop, serial order and pacing."""
     with fake_openai("hold_tail") as api, listener(config={"voice": "cedar", "instructions": "Doucement"}) as client:
         assert client.submit("Bonjour").status == "success"
-        assert client.submit("Deuxième phrase").status == "success"
+        assert client.submit("Second sentence").status == "success"
         until(lambda: len(client.frames) >= 3, "Headers and audible Opus must arrive before HTTP EOF.")
         assert not api.closed.is_set() and len(api.requests) == 1
         assert not client.states("completed")
         api.release.set()
         until(lambda: len(client.states("completed")) == 2, "Both utterances must finish serially.")
-        assert [item["body"]["input"] for item in api.requests] == ["Bonjour", "Deuxième phrase"]
+        assert [item["body"]["input"] for item in api.requests] == ["Bonjour", "Second sentence"]
         assert all(item["auth"] == f"Bearer {KEY}" for item in api.requests)
         body = api.requests[0]["body"]
         assert body == {"model": MODEL, "voice": "cedar", "input": "Bonjour", "speed": 1.0,
@@ -337,7 +337,7 @@ def test_compiled_runtime_metadata():
             except ValueError as error:
                 assert KEY not in str(error)
                 if "extra_parameter" in bad:
-                    assert "wallet" not in str(error).lower() and "clé" not in str(error).lower()
+                    assert "wallet" not in str(error).lower() and "key" not in str(error).lower()
             else:
                 raise AssertionError("Technical metadata must not bypass business/credential validation.")
         for key in metadata:
@@ -401,8 +401,8 @@ def test_ogg_validation_and_timing():
 def test_failures_and_stop():
     """FB2/FB3/FB4: provider faults, finite memory/duration, cancellation and mailbox limits."""
     for mode, expected in (("unauthorized", "401"), ("quota", "429"), ("redirect", "307"),
-                           ("empty", "vide"), ("truncated", "tronquée"), ("bad_type", "Opus"),
-                           ("too_long", "maximale")):
+                           ("empty", "empty"), ("truncated", "Truncated"), ("bad_type", "Opus"),
+                           ("too_long", "Maximum audio duration")):
         with fake_openai(mode) as api, listener(config={"max_audio_sec": 1}) as client:
             assert client.submit("Test").status == "success"
             until(lambda: client.states("error"), f"Expected provider failure: {mode}")
@@ -417,8 +417,8 @@ def test_failures_and_stop():
                 assert not commands
     for mode in ("stall_headers", "hold_tail"):
         with fake_openai(mode) as api, listener() as client:
-            client.submit("En cours")
-            client.submit("Ne doit pas partir après Stop")
+            client.submit("In progress")
+            client.submit("Must not be sent after Stop")
             assert api.first.wait(2)
             before = time.monotonic()
             client.host.close(timeout_sec=.8)
@@ -429,7 +429,7 @@ def test_failures_and_stop():
         until(lambda: client.states("error"), "A stalled provider must not wait forever.", timeout=3)
         assert len(api.requests) == 1 and KEY not in str(client.results)
     with fake_openai("hold_tail") as api, listener() as client:
-        client.submit("En cours")
+        client.submit("In progress")
         assert api.first.wait(2)
         # The listener now drains while HTTP is active. Both its local FIFO and the
         # framework mailbox remain bounded; which limit is reached first is concurrent.
@@ -458,7 +458,7 @@ def document(block_version=None):
     nodes[0]["outputs"][0]["text"] = "Bonjour depuis le graphe"
     for index, node in enumerate(nodes):
         node["position"] = {"x": 80 + index * 300, "y": 190}
-    return graph_payload("TTS et lecture", nodes, [
+    return graph_payload("TTS and playback", nodes, [
         {"id": "text", "from": {"node": "text", "port": 1}, "to": {"node": "tts", "port": 1}, "kind": "data"},
         {"id": "audio", "from": {"node": "tts", "port": 1}, "to": {"node": "player", "port": 1}, "kind": "data"}])
 
@@ -496,7 +496,7 @@ def test_real_graph_modes(*, reordered=False):
             time.sleep(.2)  # Attach the test publisher; production workers use the ready gate.
             assert api.requests == [], "Preparing Run cannot issue paid requests."
             envelope = MessageEnvelope(run_id=run.run_id, source_node_id="text", source_port_id=1,
-                payload="Bonjour du port texte", content_type="text/plain", sequence=1)
+                payload="Hello from the text port", content_type="text/plain", sequence=1)
             publisher.send_multipart([topic.encode(), envelope.to_json().encode()])
             received = []
             until(lambda: bool(api.requests), "Text graph edge must trigger TTS.")
@@ -507,7 +507,7 @@ def test_real_graph_modes(*, reordered=False):
                     received.append(frame)
             assert b"".join(frame.payload for frame in received) == encoded_opus(), run.logs
             assert all(frame.codec == "opus" and frame.sample_rate_hz == 48000 for frame in received)
-            assert api.requests[0]["body"]["input"] == "Bonjour du port texte"
+            assert api.requests[0]["body"]["input"] == "Hello from the text port"
             assert "tts:1" not in run.output_values, "Opus must never be persisted as a message output."
             assert KEY not in str(run.results) and KEY not in str(run.logs)
         finally:
@@ -538,7 +538,7 @@ def test_properties_browser(page, server, blocking_errors):
     modal = page.locator('[data-generic-block-modal-root].tts-ui')
     modal.wait_for()
     assert '{"action":"interrupt"}' in modal.inner_text()
-    assert "son déjà envoyé au lecteur n’est pas coupé" in modal.inner_text()
+    assert "sound already sent to the player is not cut off" in modal.inner_text()
     assert modal.locator('[data-tts-apply]').is_disabled()
     for width, height, label in ((1440, 1000, "desktop"), (390, 740, "mobile"), (320, 568, "small")):
         page.set_viewport_size({"width": width, "height": height})
@@ -557,7 +557,7 @@ def test_properties_browser(page, server, blocking_errors):
         assert modal.locator('[data-block-modal-error-panel]').count() == 1
         page.screenshot(path=artifact_path(f"openai-tts-modal-{label}.png"))
     title = modal.locator('[data-tts-title]')
-    title.fill("Voix de test")
+    title.fill("Test voice")
     assert modal.locator('[data-tts-apply]').is_enabled()
     title.fill("OpenAI TTS Stream")
     assert modal.locator('[data-tts-apply]').is_disabled()
@@ -569,22 +569,22 @@ def test_properties_browser(page, server, blocking_errors):
     advanced.locator('summary').click()
     modal.locator('[data-tts-apply]').click()
     assert advanced.evaluate("element => element.open")
-    assert "Vérifiez" in modal.locator('[data-tts-feedback]').inner_text()
+    assert "Check" in modal.locator('[data-tts-feedback]').inner_text()
     timeout.fill("10")
-    title.fill("Voix de test")
+    title.fill("Test voice")
     modal.locator('[data-tts-setting="voice"]').select_option("cedar")
-    modal.locator('[data-tts-setting="instructions"]').fill("Voix calme")
+    modal.locator('[data-tts-setting="instructions"]').fill("Calm voice")
     modal.locator('[data-tts-apply]').click()
     # The inspector can coexist with the modal; never observe its independent feedback.
-    modal.locator('[data-tts-feedback]').filter(has_text="prochain Run").wait_for(timeout=5000)
+    modal.locator('[data-tts-feedback]').filter(has_text="next Run").wait_for(timeout=5000)
     modal.locator('[data-close-block-modal]').click()
     page.reload()
     page.set_viewport_size({"width": 1440, "height": 1000})
     page.locator('.canvas-node[data-node-id="tts"] h3').dblclick()
     modal.wait_for()
-    assert modal.locator('[data-tts-title]').input_value() == "Voix de test"
+    assert modal.locator('[data-tts-title]').input_value() == "Test voice"
     assert modal.locator('[data-tts-setting="voice"]').input_value() == "cedar"
-    assert modal.locator('[data-tts-setting="instructions"]').input_value() == "Voix calme"
+    assert modal.locator('[data-tts-setting="instructions"]').input_value() == "Calm voice"
     modal.locator('[data-close-block-modal]').click()
     assert not blocking_errors, blocking_errors
     test_editor_run_preparation(page, server)

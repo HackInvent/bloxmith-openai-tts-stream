@@ -108,7 +108,7 @@ def test_tts_fanout(channels):
             time.sleep(.2)
             assert not speech.requests and transcription.opened == 0
             envelope = MessageEnvelope(run_id=run.run_id, source_node_id="text", source_port_id=1,
-                payload="Synthèse interopérable", content_type="text/plain", sequence=1)
+                payload="Interoperable synthesis", content_type="text/plain", sequence=1)
             publisher.send_multipart([topic.encode(), envelope.to_json().encode()])
             deadline = time.monotonic() + 10
             final_before_stop = False
@@ -160,7 +160,7 @@ def verify_player(page, server, blocking_errors, captures):
         item["path"] for item in catalog["browser_runtime_assets"]
         if item["path"].endswith("/assets/js/browser_runtime.js"))
     page.goto(server.base_url)
-    page.set_content('<button id="activate">Activer le son de test</button>')
+    page.set_content('<button id="activate">Enable the test sound</button>')
     page.evaluate("""() => { document.querySelector('#activate').onclick = async () => {
       window.testAudio = new AudioContext({ sampleRate: 48000 }); await window.testAudio.resume();
     }; }""")

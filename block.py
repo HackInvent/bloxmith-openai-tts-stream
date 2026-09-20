@@ -49,26 +49,26 @@ def _config(raw: Mapping[str, Any] | None) -> dict[str, Any]:
     reject other unknown fields and literal credentials independently of technical metadata.
     """
     if raw is not None and not isinstance(raw, Mapping):
-        raise TtsError("Configuration TTS invalide.")
+        raise TtsError("Invalid TTS configuration.")
     # Compilation adds node ancestry even without composites; these fields are not speech settings.
     if raw and set(raw) - set(DEFAULTS) - RUNTIME_METADATA_KEYS:
-        raise TtsError("Paramètre de configuration TTS non pris en charge.")
+        raise TtsError("Unsupported TTS configuration setting.")
     result = {key: (raw or {}).get(key, value) for key, value in DEFAULTS.items()}
     for key, maximum in (("api_key_ref", 200), ("instructions", 1024), ("voice", 20)):
         if not isinstance(result[key], str) or len(result[key]) > maximum:
-            raise TtsError(f"Champ {key} invalide : {maximum} caractères maximum.")
+            raise TtsError(f"Invalid {key} field: {maximum} characters maximum.")
         result[key] = result[key].strip()
     if result["api_key_ref"] and not SECRET_REF.fullmatch(result["api_key_ref"]):
-        raise TtsError("Utilisez une référence complète du wallet, par exemple secret://workspace/openai_tts_api.")
+        raise TtsError("Use a complete wallet reference, for example secret://workspace/openai_tts_api.")
     if result["voice"] not in VOICES:
-        raise TtsError("Voix OpenAI non prise en charge.")
+        raise TtsError("Unsupported OpenAI voice.")
     for key, (minimum, maximum) in BOUNDS.items():
         try:
             value = float(result[key])
         except (ValueError, TypeError, OverflowError):
-            raise TtsError(f"{key} doit être un nombre.") from None
+            raise TtsError(f"{key} must be a number.") from None
         if isinstance(result[key], bool) or not math.isfinite(value) or not minimum <= value <= maximum:
-            raise TtsError(f"{key} doit être compris entre {minimum:g} et {maximum:g}.")
+            raise TtsError(f"{key} must be between {minimum:g} and {maximum:g}.")
         result[key] = value
     return result
 
@@ -76,9 +76,9 @@ def _config(raw: Mapping[str, Any] | None) -> dict[str, Any]:
 def _text(raw: Any) -> str:
     """Accept plain text only; one message is one synthesis, without implicit JSON coercion."""
     if not isinstance(raw, str):
-        raise TtsError("text_in attend du texte, pas un objet ou des données audio.")
+        raise TtsError("text_in expects text, not an object or audio data.")
     if len(raw) > MAX_TEXT:
-        raise TtsError("Texte trop long : 4 096 caractères maximum par message.")
+        raise TtsError("Text too long: 4,096 characters maximum per message.")
     return raw.strip()
 
 
@@ -86,13 +86,13 @@ def _interrupt(raw: Any) -> dict[str, str]:
     """Validate the explicit interruption command, distinct from producer start/stop metadata."""
     if isinstance(raw, str):
         if len(raw.encode("utf-8")) > MAX_COMMAND_BYTES:
-            raise TtsError("Commande trop volumineuse : 4 Kio maximum sur command_in.")
+            raise TtsError("Command too large: 4 KiB maximum on command_in.")
         try:
             raw = json.loads(raw)
         except (ValueError, RecursionError):
             raise TtsError('command_in attend le JSON {"action":"interrupt"}.') from None
     if not isinstance(raw, Mapping) or set(raw) != {"action"} or raw["action"] != "interrupt":
-        raise TtsError('command_in attend uniquement {"action":"interrupt"}, pas le stop de fin de flux.')
+        raise TtsError('command_in only expects {"action":"interrupt"}, not the end-of-stream stop.')
     return {"action": "interrupt"}
 
 
@@ -112,16 +112,16 @@ def _fresh_input(context: BlockRuntimeContext, name: str) -> tuple[bool, Any]:
 def _secret(context: Any, config: dict) -> str:
     """Resolve a server-side wallet secret for this job without retaining it in results/state."""
     if not config["api_key_ref"]:
-        raise TtsError("Renseignez la référence du secret OpenAI dans les propriétés du bloc.")
+        raise TtsError("Fill in the OpenAI secret reference in the block properties.")
     resolver = context.services.get("resolve_secret")
     if not callable(resolver):
-        raise TtsError("Le résolveur de secrets du wallet n’est pas disponible.")
+        raise TtsError("The wallet secret resolver is not available.")
     try:
         value = resolver(config["api_key_ref"])
     except Exception:
-        raise TtsError("Clé OpenAI inaccessible : déverrouillez le wallet et vérifiez la référence.") from None
+        raise TtsError("OpenAI key unreachable: unlock the wallet and check the reference.") from None
     if not isinstance(value, str) or not value.strip() or len(value) > 4096 or any(c in value for c in "\r\n"):
-        raise TtsError("Le secret OpenAI est vide ou invalide.")
+        raise TtsError("The OpenAI secret is empty or invalid.")
     return value.strip()
 
 
@@ -130,11 +130,11 @@ def _failure(error: Exception, stream_id: str = "") -> BlockRuntimeResult:
     if isinstance(error, (TtsError, OpusStreamError)):
         message = str(error)
     elif isinstance(error, RuntimeListenerError):
-        message = "File TTS pleine ou arrêtée : attendez la fin des messages en cours, ou relancez Run."
+        message = "TTS queue full or stopped: wait for the current messages to finish, or Run again."
     elif isinstance(error, TimeoutError):
-        message = "Synthèse interrompue : délai maximal dépassé."
+        message = "Synthesis interrupted: maximum delay exceeded."
     else:
-        message = "Synthèse interrompue : erreur de connexion ou de transport audio."
+        message = "Synthesis interrupted: connection or audio transport error."
     return BlockRuntimeResult(status="failed", outputs=[], error=message, last_message=message,
                               metadata={"openai_tts_stream": {"state": "error", "stream_id": stream_id}})
 
@@ -158,7 +158,7 @@ class OpenAITtsStreamBlock(BlockDefinition):
         """
         inputs = {port.id: port for port in context.input_ports}
         outputs = {port.id: port for port in context.output_ports}
-        message = "Ports TTS invalides : entrée text_in (1), sorties audio_out Opus (1) et command_out (2), entrée command_in (2) facultative."
+        message = "Invalid TTS ports: text_in input (1), audio_out Opus (1) and command_out (2) outputs, optional command_in input (2)."
         if (len(inputs) != len(context.input_ports) or set(inputs) not in ({1}, {1, 2})
                 or len(context.output_ports) != 2 or set(outputs) != {1, 2}):
             raise TtsError(message)
@@ -175,11 +175,11 @@ class OpenAITtsStreamBlock(BlockDefinition):
                     or command.required or command.multiplicity != "one"
                     or getattr(command, "transport", "message") != "message"
                     or tuple(command.accepts) != ("application/json",)):
-                raise TtsError("text_in et command_in doivent être indépendants et non requis pour l’exécution.")
+                raise TtsError("text_in and command_in must be independent and not required for execution.")
         profile = audio.audio_stream
         codecs = profile.get("codecs", ()) if isinstance(profile, Mapping) else profile.codecs
         if tuple(codecs) != ("opus",):
-            raise TtsError("Ancienne sortie TTS PCM : recréez le bloc pour obtenir audio_out Opus et command_out.")
+            raise TtsError("Legacy PCM TTS output: recreate the block to get the audio_out Opus and command_out ports.")
 
     def prepare_runtime(self, context: BlockRuntimePreparationContext) -> BlockRuntimePreparation:
         """Validate static contracts without IO, then opt into the generic Run listener."""
@@ -193,9 +193,9 @@ class OpenAITtsStreamBlock(BlockDefinition):
             config = _config(context.config)
             if context.runtime_mode == "zeromq_active":
                 if importlib.util.find_spec("httpx") is None:
-                    raise TtsError("Installez les dépendances du bloc : blocs/openai_tts_stream/requirements.txt.")
+                    raise TtsError("Install the block dependencies: blocs/openai_tts_stream/requirements.txt.")
                 _secret(context, config)
-            return BlockRuntimeResult(last_message="TTS prêt : en attente d’un texte sur text_in.")
+            return BlockRuntimeResult(last_message="TTS ready: waiting for text on text_in.")
         except Exception as error:
             return _failure(error)
 
@@ -212,26 +212,26 @@ class OpenAITtsStreamBlock(BlockDefinition):
             has_text, raw_text = _fresh_input(context, "text_in")
             command = _interrupt(raw_command) if has_command else None
             if context.runtime_mode != "zeromq_active":
-                return BlockRuntimeResult(status="skipped", outputs=[], last_message="Simulation : aucun appel OpenAI ni flux audio.",
+                return BlockRuntimeResult(status="skipped", outputs=[], last_message="Simulation: no OpenAI call and no audio stream.",
                                           metadata={self.kind: {"state": "simulation"}})
             if not has_command and not has_text:
-                return BlockRuntimeResult(status="skipped", last_message="En attente d’un nouveau texte ou d’une commande.")
+                return BlockRuntimeResult(status="skipped", last_message="Waiting for new text or a command.")
             sender = context.services.get("runtime_listener")
             if sender is None:
                 raise TtsError("Listener TTS indisponible : Stop puis Run.")
             if has_command:
                 sender.send(command)
-                return BlockRuntimeResult(last_message="Interruption transmise au TTS ; arrêt en cours.",
+                return BlockRuntimeResult(last_message="Interruption forwarded to the TTS; stopping.",
                     metadata={self.kind: {"state": "interrupt_requested"}})
             text = _text(raw_text)
             if not text:
-                return BlockRuntimeResult(status="skipped", last_message="Texte vide : aucune synthèse.")
+                return BlockRuntimeResult(status="skipped", last_message="Empty text: no synthesis.")
             audio = context.services.get("runtime_audio_streams")
             if audio is None or not audio.available:
-                raise TtsError("Reliez audio_out à une entrée Opus compatible, par exemple Audio Play Stream.audio_in.")
+                raise TtsError("Wire audio_out to a compatible Opus input, for example Audio Play Stream.audio_in.")
             stream_id = uuid4().hex
             sender.send({"text": text, "stream_id": stream_id})
-            return BlockRuntimeResult(last_message="Texte mis en file de synthèse.",
+            return BlockRuntimeResult(last_message="Text queued for synthesis.",
                                       metadata={self.kind: {"state": "queued", "characters": len(text), "stream_id": stream_id}})
         except Exception as error:
             return _failure(error)
@@ -276,7 +276,7 @@ class OpenAITtsStreamBlock(BlockDefinition):
                                 await active
                             active = None
                         context.emit_result(BlockRuntimeResult(
-                            last_message="TTS interrompu ; textes en attente supprimés. Le son déjà transmis reste dans le lecteur.",
+                            last_message="TTS interrupted; pending texts dropped. The sound already sent stays in the player.",
                             metadata={self.kind: {"state": "interrupted", "stream_id": interrupted_stream,
                                                  "discarded_texts": discarded}}))
                         continue
@@ -285,10 +285,10 @@ class OpenAITtsStreamBlock(BlockDefinition):
                             raise TtsError("Commande TTS interne invalide.")
                         candidate = payload["stream_id"]
                         if not isinstance(candidate, str) or not re.fullmatch(r"[0-9a-f]{32}", candidate):
-                            raise TtsError("Identifiant de synthèse invalide.")
+                            raise TtsError("Invalid synthesis identifier.")
                         text = _text(payload["text"])
                         if len(pending) >= MAX_PENDING_TEXTS:
-                            raise TtsError("File locale TTS pleine : ce texte n’a pas été conservé. Envoyez interrupt ou attendez.")
+                            raise TtsError("Local TTS queue full: this text was not kept. Send interrupt, or wait.")
                         pending.append((text, candidate))
                     except TtsError as error:
                         context.emit_result(_failure(error))
@@ -322,7 +322,7 @@ class OpenAITtsStreamBlock(BlockDefinition):
             return
         audio = context.services.get("runtime_audio_streams")
         if audio is None or not audio.available:
-            raise TtsError("La sortie audio_out n’est pas connectée à un récepteur Opus compatible.")
+            raise TtsError("The audio_out output is not connected to a compatible Opus receiver.")
         key = _secret(context, config)
         body = {"model": MODEL, "voice": config["voice"], "input": text, "speed": config["speed"],
                 "response_format": "opus", "stream_format": "audio"}
@@ -342,7 +342,7 @@ class OpenAITtsStreamBlock(BlockDefinition):
             context.emit_result(BlockRuntimeResult(outputs=[BlockRuntimeOutput(
                 port_id=2, port_name="command_out", value=json.dumps(value), content_type="application/json")]))
 
-        context.emit_result(BlockRuntimeResult(last_message="Génération de la voix OpenAI…",
+        context.emit_result(BlockRuntimeResult(last_message="Generating the OpenAI voice…",
             metadata={self.kind: {"state": "generating", "stream_id": stream_id, "voice": config["voice"]}}))
         try:
             async with asyncio.timeout(config["max_audio_sec"] + config["read_timeout_sec"] + config["connect_timeout_sec"]):
@@ -350,23 +350,23 @@ class OpenAITtsStreamBlock(BlockDefinition):
                     async with http.stream("POST", SPEECH_URL, json=body,
                             headers={"Authorization": f"Bearer {key}", "Accept": "audio/ogg, audio/opus, application/octet-stream"}) as response:
                         if response.status_code != 200:
-                            reason = {401: "Clé OpenAI refusée.", 403: "Accès au modèle TTS refusé.",
-                                      429: "Quota ou limite OpenAI atteint.", 400: "OpenAI a refusé le texte ou les réglages de voix."}.get(
-                                      response.status_code, "Le service de synthèse OpenAI a refusé la requête.")
+                            reason = {401: "OpenAI key refused.", 403: "Access to the TTS model refused.",
+                                      429: "Quota ou limite OpenAI atteint.", 400: "OpenAI refused the text or the voice settings."}.get(
+                                      response.status_code, "The OpenAI synthesis service refused the request.")
                             raise TtsError(f"{reason} HTTP {response.status_code}. Aucun nouvel essai automatique.")
                         mime = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
                         if mime not in {"audio/ogg", "audio/opus", "application/ogg", "application/octet-stream"}:
-                            raise TtsError("OpenAI n’a pas retourné le format Ogg Opus attendu.")
+                            raise TtsError("OpenAI did not return the expected Ogg Opus format.")
                         async for chunk in response.aiter_bytes(chunk_size=HTTP_CHUNK_BYTES):
                             if context.stop_requested():
                                 raise asyncio.CancelledError
                             downloaded += len(chunk)
                             if downloaded > MAX_RESPONSE_BYTES:
-                                raise TtsError("Réponse audio trop volumineuse : synthèse interrompue.")
+                                raise TtsError("Audio response too large: synthesis interrupted.")
                             previous_seconds = container.seconds
                             for page in container.push(chunk):
                                 if container.seconds > config["max_audio_sec"]:
-                                    raise TtsError("Durée audio maximale atteinte : synthèse interrompue.")
+                                    raise TtsError("Maximum audio duration reached: synthesis interrupted.")
                                 if container.seconds > previous_seconds:
                                     # A late HTTP page rebases the clock: never flood readers to catch up.
                                     first_audio_at = max(first_audio_at or 0, time.monotonic() - previous_seconds)
@@ -384,7 +384,7 @@ class OpenAITtsStreamBlock(BlockDefinition):
                                 total += len(page)
                                 previous_seconds = container.seconds
                                 if frames == 1:
-                                    context.emit_result(BlockRuntimeResult(last_message="Voix Opus en cours de diffusion sur audio_out.",
+                                    context.emit_result(BlockRuntimeResult(last_message="Opus voice streaming on audio_out.",
                                         metadata={self.kind: {"state": "streaming", "stream_id": stream_id}}))
                         container.finish()
                         if context.stop_requested():
@@ -400,7 +400,7 @@ class OpenAITtsStreamBlock(BlockDefinition):
                     await asyncio.sleep(max(0, min(.02, due - time.monotonic())))
             if context.stop_requested():
                 raise asyncio.CancelledError
-            context.emit_result(BlockRuntimeResult(last_message="Synthèse diffusée ; le lecteur termine les derniers échantillons.",
+            context.emit_result(BlockRuntimeResult(last_message="Synthesis streamed; the player finishes the last samples.",
                 metadata={self.kind: {"state": "completed", "stream_id": stream_id, "frames_sent": frames,
                                      "bytes_sent": total, "audio_seconds": container.seconds, "codec": "opus", "container": "ogg"}}))
         finally:
@@ -415,7 +415,7 @@ class OpenAITtsStreamBlock(BlockDefinition):
         config = _config(node.get("config"))
         return render_node_card_template(block=self, node=node, node_classes=["openai-tts-node"], replacements={
             "title": str(node.get("title") or self.default_title()), "voice": config["voice"],
-            "configured": "Clé référencée" if config["api_key_ref"] else "Configurer le secret OpenAI"})
+            "configured": "Key referenced" if config["api_key_ref"] else "Configure the OpenAI secret"})
 
     def _settings_html(self, node: dict) -> str:
         """Render grouped, labelled settings with progressive disclosure and clear cost/privacy scope."""
@@ -429,22 +429,22 @@ class OpenAITtsStreamBlock(BlockDefinition):
             return (f'<label>{label}<input type="number" data-tts-setting="{key}" value="{config[key]:g}" '
                     f'min="{minimum:g}" max="{maximum:g}" step="any" required /></label>')
         return (
-            '<section class="tts-section"><div class="tts-heading"><h3>Connexion OpenAI</h3>'
-            f'<span class="tts-badge">{MODEL}</span></div><label>Référence du secret'
+            '<section class="tts-section"><div class="tts-heading"><h3>OpenAI connection</h3>'
+            f'<span class="tts-badge">{MODEL}</span></div><label>Secret reference'
             f'<input type="text" data-tts-setting="api_key_ref" value="{ref}" maxlength="200" spellcheck="false" '
             'autocomplete="off" placeholder="secret://workspace/openai_tts_api" /></label>'
-            '<p class="tts-help">Copiez la référence complète depuis Paramètres → Secrets. La clé reste dans le wallet côté serveur.</p>'
-            '<p class="tts-notice">Le texte est envoyé à OpenAI et facturé sur votre compte API. Aucun appel n’est fait en ouvrant cette fenêtre.</p></section>'
-            '<section class="tts-section"><h3>Voix et interprétation</h3><div class="tts-grid">'
-            f'<label>Voix<select data-tts-setting="voice">{voices}</select></label>{number("speed", "Vitesse (×)")}</div>'
-            f'<label>Consignes de voix <span class="tts-optional">Facultatif</span><textarea data-tts-setting="instructions" maxlength="1024" '
-            f'rows="3" placeholder="Parle en français, avec une voix calme et naturelle.">{instructions}</textarea></label>'
-            '<p class="tts-help">Le texte à prononcer arrive sur text_in. Ces consignes règlent le ton et la diction, pas le contenu du message.</p></section>'
-            '<details class="tts-disclosure"><summary>Délais et limites</summary><div class="tts-disclosure-body"><div class="tts-grid">'
-            f'{number("connect_timeout_sec", "Connexion maximale (s)")}{number("read_timeout_sec", "Attente réseau maximale (s)")}'
-            f'{number("max_audio_sec", "Durée audio maximale (s)")}</div></div></details>'
-            '<p class="tts-help">Voix générée par IA : informez les personnes qui l’écoutent. Chaque message est traité dans l’ordre ; '
-            'branchez une sortie de texte final, pas un texte provisoire qui change à chaque mot.</p>')
+            '<p class="tts-help">Copy the complete reference from Settings → Secrets. The key stays in the wallet, on the server.</p>'
+            '<p class="tts-notice">The text is sent to OpenAI and billed to your API account. No call is made by opening this window.</p></section>'
+            '<section class="tts-section"><h3>Voice and delivery</h3><div class="tts-grid">'
+            f'<label>Voice<select data-tts-setting="voice">{voices}</select></label>{number("speed", "Speed (×)")}</div>'
+            f'<label>Voice instructions <span class="tts-optional">Optional</span><textarea data-tts-setting="instructions" maxlength="1024" '
+            f'rows="3" placeholder="Speak calmly and naturally.">{instructions}</textarea></label>'
+            '<p class="tts-help">The text to speak arrives on text_in. These instructions set the tone and the delivery, not the content of the message.</p></section>'
+            '<details class="tts-disclosure"><summary>Delays and limits</summary><div class="tts-disclosure-body"><div class="tts-grid">'
+            f'{number("connect_timeout_sec", "Maximum connection (s)")}{number("read_timeout_sec", "Maximum network wait (s)")}'
+            f'{number("max_audio_sec", "Maximum audio duration (s)")}</div></div></details>'
+            '<p class="tts-help">AI-generated voice: tell the people who listen to it. Every message is processed in order; '
+            'wire a final text output, not a provisional text that changes with every word.</p>')
 
     def render_modal(self, *, node: dict, payload: dict | None = None) -> dict:
         """Render fixed actions and diagnostics, explaining whether this node has command_in."""
@@ -459,12 +459,12 @@ class OpenAITtsStreamBlock(BlockDefinition):
     def _command_help_html(self, node: dict) -> str:
         """Distinguish current command-capable nodes from persisted one-input Opus nodes."""
         if not any(port.get("id") == 2 and port.get("name") == "command_in" for port in node.get("inputs", [])):
-            return ('<p class="tts-help">Ce bloc n’a pas d’entrée command_in. Pour l’ajouter, arrêtez le Run, '
-                    'recréez le TTS depuis le catalogue et reprenez ses réglages et ses liens. '
-                    'La synthèse existante reste utilisable sans interruption data.</p>')
-        return ('<p class="tts-help">Sur l’entrée <code>command_in</code> de ce TTS, envoyez '
-                '<code>{"action":"interrupt"}</code> pour annuler la synthèse et vider les textes en attente. '
-                'Le son déjà envoyé au lecteur n’est pas coupé.</p>')
+            return ('<p class="tts-help">This block has no command_in input. To add it, stop the Run, '
+                    'recreate the TTS from the catalog, then restore its settings and its links. '
+                    'The existing synthesis stays usable, without a data interruption.</p>')
+        return ('<p class="tts-help">On the <code>command_in</code> input of this TTS, send '
+                '<code>{"action":"interrupt"}</code> to cancel the synthesis and drop the pending texts. '
+                'The sound already sent to the player is not cut off.</p>')
 
     def render_inspector_panel(self, *, node: dict, payload: dict | None = None) -> dict:
         """Keep shared settings and node-specific command help in the inspector's standard tabs."""
@@ -479,20 +479,20 @@ class OpenAITtsStreamBlock(BlockDefinition):
         try:
             if action == "save_properties":
                 if not isinstance(values, dict) or set(values) - {"title", "config"}:
-                    raise TtsError("Propriétés TTS invalides.")
+                    raise TtsError("Invalid TTS properties.")
                 title = values.get("title", node.get("title") or self.default_title())
                 if not isinstance(title, str) or not 1 <= len(title.strip()) <= 200:
-                    raise TtsError("Le nom doit contenir entre 1 et 200 caractères.")
+                    raise TtsError("The name must contain between 1 and 200 characters.")
                 patch = values.get("config", {})
                 if not isinstance(patch, dict) or set(patch) - set(DEFAULTS):
-                    raise TtsError("Réglages TTS invalides.")
+                    raise TtsError("Invalid TTS settings.")
                 config = _config({**(node.get("config") or {}), **patch})
                 return {"node_patch": {"title": title.strip(), "config": config}, "rerender_inspector": False}
             result = super().handle_ui_action(node=node, action=action, values=values, payload=payload)
             patch = result.get("node_patch", {}).get("config")
             if isinstance(patch, dict):
                 if set(patch) - set(DEFAULTS):
-                    raise TtsError("Réglages TTS invalides.")
+                    raise TtsError("Invalid TTS settings.")
                 normalized = _config({**(node.get("config") or {}), **patch})
                 result["node_patch"]["config"] = {key: normalized[key] for key in patch}
             return result

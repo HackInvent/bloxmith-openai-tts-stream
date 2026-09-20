@@ -23,10 +23,10 @@ export function mountSettings(root, api) {
     const refresh = () => {
       if (!disposed && apply) {
         apply.disabled = busy || !changed() || Boolean(api.isReadOnly?.());
-        apply.textContent = busy ? "Application…" : "Appliquer";
+        apply.textContent = busy ? "Applying…" : "Apply";
       }
     };
-    const dirty = () => { announce(changed() ? "Modifications non appliquées." : "Aucune modification."); refresh(); };
+    const dirty = () => { announce(changed() ? "Unapplied changes." : "No change."); refresh(); };
     /** Reveal invalid advanced fields before focusing them; preserve edits made during save. */
     const save = async () => {
       if (disposed || busy || !changed() || api.isReadOnly?.()) return;
@@ -34,7 +34,7 @@ export function mountSettings(root, api) {
       if (invalid) {
         const details = invalid.closest("details");
         if (details) details.open = true;
-        invalid.reportValidity(); announce("Vérifiez le champ signalé.", true); return;
+        invalid.reportValidity(); announce("Check the highlighted field.", true); return;
       }
       const patch = snapshot();
       busy = true; refresh();
@@ -42,8 +42,8 @@ export function mountSettings(root, api) {
         const result = await api.applyAction("save_properties", patch);
         if (result?.error) throw new Error(result.error);
         saved = JSON.stringify(patch);
-        announce(changed() ? "Enregistré ; des modifications restent à appliquer." : "Appliqué au prochain Run.");
-      } catch (error) { announce(error.message || "Échec de l’enregistrement.", true); }
+        announce(changed() ? "Saved; some changes still need to be applied." : "Applied at the next Run.");
+      } catch (error) { announce(error.message || "Saving failed.", true); }
       finally { busy = false; refresh(); }
     };
     for (const field of controls) { field.addEventListener("input", dirty); field.addEventListener("change", dirty); }
