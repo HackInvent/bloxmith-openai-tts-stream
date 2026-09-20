@@ -455,7 +455,7 @@ def document(block_version=None):
              AudioPlayStreamBlock().build_node_payload(node_id="player")]
     if block_version:
         nodes[1]["block_version"] = block_version
-    nodes[0]["outputs"][0]["text"] = "Bonjour depuis le graphe"
+    nodes[0]["outputs"][0]["text"] = "Hello from the graph"
     for index, node in enumerate(nodes):
         node["position"] = {"x": 80 + index * 300, "y": 190}
     return graph_payload("TTS and playback", nodes, [
