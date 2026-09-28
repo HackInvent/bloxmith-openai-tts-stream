@@ -8,6 +8,10 @@
 Verified BloxSmith versions: **1.0.9** (bundled-block tests; see [test evidence](compatibility.json)).
 <!-- block-metadata:end -->
 
+[![TTS STREAM — Turns incoming text into a live Opus speech stream and separate command events.](media/thumbnail.webp)](media/cover.png)
+
+*Concept illustration. [Artwork and generation prompt](media/README.md).*
+
 
 An autonomous `openai_tts_stream` block that turns each text message into AI-generated speech and progressively publishes **Opus in Ogg**, compatible with **Audio Play Stream**, **OpenAI Realtime STT** and **Save Audio**. It never builds a complete audio file or sends audio through a data port.
 
