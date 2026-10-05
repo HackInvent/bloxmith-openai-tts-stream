@@ -29,6 +29,10 @@ For an **old PCM TTS node**, stop the Run, recreate the block from the catalog, 
 
 An **old Opus node without `command_in`** still works without data interruption. Recreate it while stopped to obtain the new input. Existing nodes never gain a port silently; the modal and inspector explain this limitation.
 
+An **old node without `synthesis_request`** still accepts ordinary text and its
+existing commands. Recreate it while stopped only when you need correlated call
+requests. The code never migrates persisted ports behind your back.
+
 Text and voice instructions are sent to OpenAI and billed to the API account. Tell users that the voice is **AI-generated**. Opening properties or preparing a Run does not synthesize speech; text must arrive on `text_in`.
 
 ## Ports and provider contract
@@ -37,6 +41,7 @@ Text and voice instructions are sent to OpenAI and billed to the API account. Te
 | --- | --- | --- |
 | `text_in` (1) | message | One source; text up to 4,096 characters. Not required, so commands can run alone. Empty text is ignored; objects are rejected. |
 | `command_in` (2) | message | One optional JSON source; only `{"action":"interrupt"}`. Cancels synthesis and clears the local queue without stopping the Run. |
+| `synthesis_request` (3) | message | One optional JSON source; exact `text`, `call_id`, `message_sha256` fields. Preserves call identity through queued synthesis. |
 | `audio_out` (1) | audio_stream | One output, multiple consumers; Opus/Ogg, 48 kHz decode clock, mono/stereo according to the actual header. |
 | `command_out` (2) | message | Separate start/stop JSON for multiple consumers. Not needed by the player; required by STT and Save Audio. |
 
@@ -65,7 +70,35 @@ Interruption removes earlier texts in local receive order; later messages procee
 
 The inputs are independent (`on_each_event`). Commands work without text and after previous text has been consumed. Only fresh inputs are handled: cached commands do not interrupt later text, and cached text is not synthesized again on a command.
 
-If both inputs are fresh in the same activation, interruption wins and that activation's text is discarded. Manual replay without a new value is ignored. Start/stop belong only to `command_out`; other input actions, malformed JSON and extra fields are rejected. Text-form JSON commands are limited to 4 KiB, as on the Speaker.
+### Correlated call synthesis
+
+Use `synthesis_request` instead of `text_in` for one approved telephone message:
+`{"text":"…","call_id":"…","message_sha256":"…"}`. Supply the lowercase SHA-256
+of the **exact UTF-8 text**, including whitespace. JSON is limited to 32 KiB and
+text to 4,096 characters; duplicate fields, mismatched hashes and extra fields
+are refused. Call IDs contain 1–128 ASCII letters, digits, underscores or hyphens.
+Normal `text_in` stays plain text; it never implicitly parses this object.
+
+Start carries `call_id` and `message_sha256`; stop carries the same `call_id`
+alongside its usual stream ID, totals and aborted flag. The identity belongs to
+the queued request, not to whatever call happens to be current later. These
+fields are local graph metadata and are not sent in the OpenAI HTTP body.
+Ordinary text retains the original start/stop shape exactly.
+
+Send only one speech input per activation. If both speech inputs are fresh, the
+activation is rejected; a fresh valid interrupt still takes priority over both.
+An interrupted correlated stream retains its original call ID on aborted stop.
+
+For Telephony, map only `call.ready_to_speak` to this input, preserving its
+message and hash, then connect both TTS outputs to Telephony's matching inputs.
+Telephony independently rejects obsolete call/stream identities. The hash is
+correlation evidence, not a digital signature, speaker verification or proof of
+the generated audio's exact wording. Voice instructions can affect delivery.
+An upstream hangup alone does not cancel a queued paid TTS request; late audio
+must still be rejected by the receiver. A new request may otherwise wait behind
+it until it completes or reaches a configured limit.
+
+If interruption and either speech input are fresh in the same activation, interruption wins and that activation's text is discarded. Manual replay without a new value is ignored. Start/stop belong only to `command_out`; other input actions, malformed JSON and extra fields are rejected. Text-form JSON interrupt commands are limited to 4 KiB, as on the Speaker.
 
 `interrupt_requested` means the command was delivered to the listener. `interrupted` confirms processing and reports the number of removed texts; neither claims the browser Speaker stopped.
 
@@ -138,6 +171,10 @@ Tests use FFmpeg-generated synthetic audio. FFmpeg is needed by these tests, not
 Preparation regression includes full blueprint compilation and reloading its flattened runtime document, not only hand-built graphs. The editor Run button is tested with a fake wallet, without Play or text. No real key or paid OpenAI request is used.
 
 `F5.50_tts_interrupt_commands.py` covers interruption during a network wait, queue purge/resumption, independent fresh inputs, strict commands, a graph-delivered command after text consumption and no-I/O simulation.
+
+`F5.51_tts_correlation.py` checks strict correlated requests, exact whitespace,
+provider-body isolation, successive stream identities, cancellation/resumption,
+ambiguous speech inputs and compatibility with saved two-input nodes.
 
 Provider references: [OpenAI text-to-speech guide](https://developers.openai.com/api/docs/guides/text-to-speech) and [Speech API reference](https://developers.openai.com/api/reference/resources/audio/subresources/speech/methods/create).
 

@@ -50,7 +50,7 @@ def lifecycle(client, stream_id):
 def test_interrupt_contract_and_io_free_simulation():
     """FB1/FB5: independent optional message inputs and compatibility without simulation IO."""
     ports = BLOCK.model["ports"]["inputs"]
-    assert [(port["id"], port["name"]) for port in ports] == [(1, "text_in"), (2, "command_in")]
+    assert [(port["id"], port["name"]) for port in ports] == [(1, "text_in"), (2, "command_in"), (3, "synthesis_request")]
     assert all(port["transport"] == "message" and port["multiplicity"] == "one" for port in ports)
     assert all(not port["required"] and port["execution_requirement"] == "not_required_for_execution"
                for port in ports), "A command cannot wait for a fresh text input."

@@ -474,7 +474,7 @@ def test_real_graph_modes(*, reordered=False):
                 node["outputs"].reverse()
     runtime_document, graph = compile_runtime_graph_document(GraphDocument.from_payload(payload))
     if reordered:
-        assert [p.id for p in graph.nodes["tts"].inputs] == [2, 1]
+        assert [p.id for p in graph.nodes["tts"].inputs] == [3, 2, 1]
         assert [p.id for p in graph.nodes["tts"].outputs] == [2, 1]
     with TemporaryDirectory(prefix="tts-graph-") as directory, fake_openai() as api:
         root = Path(directory)
@@ -561,7 +561,13 @@ def test_properties_browser(page, server, blocking_errors):
     assert modal.locator('[data-tts-apply]').is_enabled()
     title.fill("OpenAI TTS Stream")
     assert modal.locator('[data-tts-apply]').is_disabled()
-    advanced = modal.locator('.tts-disclosure').first
+    correlation_help = modal.locator('.tts-disclosure').filter(has_text="Correlated calls (optional)")
+    correlation_help.locator('summary').focus()
+    page.keyboard.press("Enter")
+    assert correlation_help.evaluate("element => element.open")
+    assert not modal.locator('[data-tts-apply]').is_enabled(), "Reading help must not mark the form dirty"
+    correlation_help.locator('summary').click()
+    advanced = modal.locator('.tts-disclosure:has([data-tts-setting="connect_timeout_sec"])')
     advanced.locator('summary').focus()
     page.keyboard.press("Enter")
     timeout = modal.locator('[data-tts-setting="connect_timeout_sec"]')

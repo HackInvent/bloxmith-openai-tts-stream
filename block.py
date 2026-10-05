@@ -7,6 +7,7 @@ from collections import deque
 from collections.abc import Mapping
 from contextlib import suppress
 from html import escape
+import hashlib
 import importlib.util
 import json
 import math
@@ -80,6 +81,46 @@ def _text(raw: Any) -> str:
     if len(raw) > MAX_TEXT:
         raise TtsError("Text too long: 4,096 characters maximum per message.")
     return raw.strip()
+
+
+def _correlation(text: Any, raw: Any) -> dict[str, str]:
+    """Bind an immutable call identity to the exact text, without normalizing its whitespace."""
+    if (not isinstance(text, str) or not text.strip() or len(text) > MAX_TEXT
+            or not isinstance(raw, Mapping) or set(raw) != {"call_id", "message_sha256"}):
+        raise TtsError("A synthesis request needs nonempty text and exact call/message correlation.")
+    call_id, digest = raw["call_id"], raw["message_sha256"]
+    if (not isinstance(call_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", call_id)
+            or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)):
+        raise TtsError("Invalid synthesis call identifier or message SHA-256.")
+    try:
+        actual = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    except UnicodeError:
+        raise TtsError("Synthesis text must be valid UTF-8.") from None
+    if digest != actual:
+        raise TtsError("Synthesis message SHA-256 does not match the exact text.")
+    return {"call_id": call_id, "message_sha256": digest}
+
+
+def _synthesis_request(raw: Any) -> tuple[str, dict[str, str]]:
+    """Parse the dedicated JSON port; normal text_in never implicitly becomes a command."""
+    if isinstance(raw, str):
+        def pairs(items):
+            result = {}
+            for key, value in items:
+                if key in result:
+                    raise ValueError("Duplicate field")
+                result[key] = value
+            return result
+        try:
+            if len(raw.encode("utf-8")) > 32768:
+                raise ValueError("Too large")
+            raw = json.loads(raw, object_pairs_hook=pairs)
+        except (ValueError, RecursionError, UnicodeError):
+            raise TtsError("synthesis_request expects valid JSON, without duplicate fields, up to 32 KiB.") from None
+    if not isinstance(raw, Mapping) or set(raw) != {"text", "call_id", "message_sha256"}:
+        raise TtsError("synthesis_request expects exactly text, call_id and message_sha256.")
+    text = raw["text"]
+    return text, _correlation(text, {key: raw[key] for key in ("call_id", "message_sha256")})
 
 
 def _interrupt(raw: Any) -> dict[str, str]:
@@ -158,8 +199,8 @@ class OpenAITtsStreamBlock(BlockDefinition):
         """
         inputs = {port.id: port for port in context.input_ports}
         outputs = {port.id: port for port in context.output_ports}
-        message = "Invalid TTS ports: text_in input (1), audio_out Opus (1) and command_out (2) outputs, optional command_in input (2)."
-        if (len(inputs) != len(context.input_ports) or set(inputs) not in ({1}, {1, 2})
+        message = "Invalid TTS ports: text_in (1), optional command_in (2) and synthesis_request (3); audio_out Opus (1) and command_out (2)."
+        if (len(inputs) != len(context.input_ports) or set(inputs) not in ({1}, {1, 2}, {1, 2, 3})
                 or len(context.output_ports) != 2 or set(outputs) != {1, 2}):
             raise TtsError(message)
         text, audio, lifecycle = inputs[1], outputs[1], outputs[2]
@@ -169,13 +210,19 @@ class OpenAITtsStreamBlock(BlockDefinition):
                 or lifecycle.name != "command_out" or getattr(lifecycle, "transport", "message") != "message"
                 or lifecycle.multiplicity != "many"):
             raise TtsError(message)
-        if len(inputs) == 2:
+        if 2 in inputs:
             command = inputs[2]
             if (text.required or command.name != "command_in"
                     or command.required or command.multiplicity != "one"
                     or getattr(command, "transport", "message") != "message"
                     or tuple(command.accepts) != ("application/json",)):
                 raise TtsError("text_in and command_in must be independent and not required for execution.")
+        if 3 in inputs:
+            request = inputs[3]
+            if (request.name != "synthesis_request" or request.required or request.multiplicity != "one"
+                    or getattr(request, "transport", "message") != "message"
+                    or tuple(request.accepts) != ("application/json",)):
+                raise TtsError("synthesis_request must be an independent optional JSON input (3).")
         profile = audio.audio_stream
         codecs = profile.get("codecs", ()) if isinstance(profile, Mapping) else profile.codecs
         if tuple(codecs) != ("opus",):
@@ -210,11 +257,12 @@ class OpenAITtsStreamBlock(BlockDefinition):
             _config(context.config)
             has_command, raw_command = _fresh_input(context, "command_in")
             has_text, raw_text = _fresh_input(context, "text_in")
+            has_request, raw_request = _fresh_input(context, "synthesis_request")
             command = _interrupt(raw_command) if has_command else None
             if context.runtime_mode != "zeromq_active":
                 return BlockRuntimeResult(status="skipped", outputs=[], last_message="Simulation: no OpenAI call and no audio stream.",
                                           metadata={self.kind: {"state": "simulation"}})
-            if not has_command and not has_text:
+            if not has_command and not has_text and not has_request:
                 return BlockRuntimeResult(status="skipped", last_message="Waiting for new text or a command.")
             sender = context.services.get("runtime_listener")
             if sender is None:
@@ -223,14 +271,19 @@ class OpenAITtsStreamBlock(BlockDefinition):
                 sender.send(command)
                 return BlockRuntimeResult(last_message="Interruption forwarded to the TTS; stopping.",
                     metadata={self.kind: {"state": "interrupt_requested"}})
-            text = _text(raw_text)
+            if has_text and has_request:
+                raise TtsError("Send text_in or synthesis_request, not both in the same activation.")
+            text, correlation = _synthesis_request(raw_request) if has_request else (_text(raw_text), None)
             if not text:
                 return BlockRuntimeResult(status="skipped", last_message="Empty text: no synthesis.")
             audio = context.services.get("runtime_audio_streams")
             if audio is None or not audio.available:
                 raise TtsError("Wire audio_out to a compatible Opus input, for example Audio Play Stream.audio_in.")
             stream_id = uuid4().hex
-            sender.send({"text": text, "stream_id": stream_id})
+            queued = {"text": text, "stream_id": stream_id}
+            if correlation is not None:
+                queued["correlation"] = correlation
+            sender.send(queued)
             return BlockRuntimeResult(last_message="Text queued for synthesis.",
                                       metadata={self.kind: {"state": "queued", "characters": len(text), "stream_id": stream_id}})
         except Exception as error:
@@ -281,22 +334,27 @@ class OpenAITtsStreamBlock(BlockDefinition):
                                                  "discarded_texts": discarded}}))
                         continue
                     try:
-                        if not isinstance(payload, Mapping) or set(payload) != {"text", "stream_id"}:
+                        if not isinstance(payload, Mapping) or set(payload) not in (
+                                {"text", "stream_id"}, {"text", "stream_id", "correlation"}):
                             raise TtsError("Commande TTS interne invalide.")
                         candidate = payload["stream_id"]
                         if not isinstance(candidate, str) or not re.fullmatch(r"[0-9a-f]{32}", candidate):
                             raise TtsError("Invalid synthesis identifier.")
-                        text = _text(payload["text"])
+                        correlation = (_correlation(payload["text"], payload["correlation"])
+                                       if "correlation" in payload else None)
+                        text = payload["text"] if correlation is not None else _text(payload["text"])
                         if len(pending) >= MAX_PENDING_TEXTS:
                             raise TtsError("Local TTS queue full: this text was not kept. Send interrupt, or wait.")
-                        pending.append((text, candidate))
+                        pending.append((text, candidate, correlation))
                     except TtsError as error:
                         context.emit_result(_failure(error))
                 # Finish draining accepted commands before opening another paid request: an
                 # interrupt just beyond the bounded pass may invalidate all pending texts.
                 if active is None and pending and mailbox_empty and not context.stop_requested():
-                    text, stream_id = pending.popleft()
-                    active = asyncio.create_task(self._speak(context, config, text, stream_id))
+                    text, stream_id, correlation = pending.popleft()
+                    job = (self._speak(context, config, text, stream_id) if correlation is None
+                           else self._speak(context, config, text, stream_id, correlation=correlation))
+                    active = asyncio.create_task(job)
                 await asyncio.sleep(.02)
         finally:
             if active is not None:
@@ -311,7 +369,8 @@ class OpenAITtsStreamBlock(BlockDefinition):
             read=config["read_timeout_sec"], write=config["connect_timeout_sec"], pool=config["connect_timeout_sec"]),
             follow_redirects=False)
 
-    async def _speak(self, context: BlockRuntimeListenerContext, config: dict, text: str, stream_id: str) -> None:
+    async def _speak(self, context: BlockRuntimeListenerContext, config: dict, text: str, stream_id: str,
+                     *, correlation: dict[str, str] | None = None) -> None:
         """Stream validated native Ogg Opus pages and separate per-text start/stop commands.
 
         Pace by the Opus clock, never by compressed byte count. Each publication contains one
@@ -320,6 +379,8 @@ class OpenAITtsStreamBlock(BlockDefinition):
         """
         if not text:
             return
+        if correlation is not None:
+            correlation = _correlation(text, correlation)
         audio = context.services.get("runtime_audio_streams")
         if audio is None or not audio.available:
             raise TtsError("The audio_out output is not connected to a compatible Opus receiver.")
@@ -337,6 +398,10 @@ class OpenAITtsStreamBlock(BlockDefinition):
         def command(action: str, *, aborted: bool = False) -> None:
             """Publish lifecycle metadata only, with exact counts of accepted audio publications."""
             value = {"action": action, "stream_id": stream_id}
+            if correlation is not None:
+                value["call_id"] = correlation["call_id"]
+                if action == "start":
+                    value["message_sha256"] = correlation["message_sha256"]
             if action == "stop":
                 value.update(frame_count=frames, byte_count=total, aborted=aborted)
             context.emit_result(BlockRuntimeResult(outputs=[BlockRuntimeOutput(
@@ -458,13 +523,22 @@ class OpenAITtsStreamBlock(BlockDefinition):
 
     def _command_help_html(self, node: dict) -> str:
         """Distinguish current command-capable nodes from persisted one-input Opus nodes."""
+        correlated = any(port.get("id") == 3 and port.get("name") == "synthesis_request"
+                         for port in node.get("inputs", []))
+        request_help = ('<p class="tts-help">For correlated calls, use <code>synthesis_request</code> with '
+                        '<code>text</code>, <code>call_id</code> and the exact text <code>message_sha256</code>. '
+                        'The call identity follows start/stop; do not also send text_in for that message.</p>'
+                        if correlated else '<p class="tts-help">This saved node has no synthesis_request input. '
+                        'Ordinary text still works. Recreate the TTS while stopped if you need correlated calls.</p>')
+        request_help = ('<details class="tts-disclosure"><summary>Correlated calls (optional)</summary>'
+                        '<div class="tts-disclosure-body">' + request_help + '</div></details>')
         if not any(port.get("id") == 2 and port.get("name") == "command_in" for port in node.get("inputs", [])):
             return ('<p class="tts-help">This block has no command_in input. To add it, stop the Run, '
                     'recreate the TTS from the catalog, then restore its settings and its links. '
-                    'The existing synthesis stays usable, without a data interruption.</p>')
+                    'The existing synthesis stays usable, without a data interruption.</p>') + request_help
         return ('<p class="tts-help">On the <code>command_in</code> input of this TTS, send '
                 '<code>{"action":"interrupt"}</code> to cancel the synthesis and drop the pending texts. '
-                'The sound already sent to the player is not cut off.</p>')
+                'The sound already sent to the player is not cut off.</p>') + request_help
 
     def render_inspector_panel(self, *, node: dict, payload: dict | None = None) -> dict:
         """Keep shared settings and node-specific command help in the inspector's standard tabs."""
